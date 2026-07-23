@@ -56,6 +56,27 @@ Example JSON spec (spec.json):
   }
 ]
 
+Consecutive placement:
+    "start_address" is OPTIONAL per set. Omit it and
+    that set is placed immediately after wherever the previous set finished
+    writing (i.e. previous set's last used address + 1). This includes any
+    zero-padding the previous set needed to reach a multiple of 4 in both
+    dimensions, so you never have to hand-compute offsets. The very first
+    set, if it omits start_address, defaults to address 0.
+
+    Example:
+    [
+      {"file": "layer1_weights.txt", "rows": 8, "cols": 8,  "format": "RM_CM"},
+      {"file": "layer1_biases.txt",  "rows": 4, "cols": 64, "format": "RM_CM"},
+      {"file": "layer2_weights.txt", "rows": 8, "cols": 32, "format": "CM_CM"}
+    ]
+    -> layer1_weights.txt starts at 0, layer1_biases.txt starts right after
+       it ends, layer2_weights.txt starts right after that.
+
+    You can still mix explicit and auto: any set CAN give a start_address
+    (e.g. to leave a gap, or jump to a fixed base for a new region), and
+    later "auto" sets will resume counting from wherever that set ended.
+
 Usage:
     python3 gen_mem.py spec.json output.mem --word-bits 8
 
@@ -160,13 +181,16 @@ def process_spec(spec_path, out_path, word_bits=8):
 
     memory = {}  # address -> value
     max_addr = -1
+    next_addr = 0  # running pointer for "auto"/omitted start_address
 
     for entry in spec:
         fname = entry["file"]
-        start_addr = entry["start_address"]
         rows = entry["rows"]
         cols = entry["cols"]
         fmt = entry["format"]
+
+        raw_start = entry.get("start_address", "auto")
+        start_addr = next_addr if raw_start == "auto" else raw_start
 
         mat = load_matrix(fname, rows, cols)
         values = matrix_to_stream(mat, fmt)
@@ -176,6 +200,8 @@ def process_spec(spec_path, out_path, word_bits=8):
             memory[addr] = v
             max_addr = max(max_addr, addr)
             addr += 1
+
+        next_addr = addr  # next auto set resumes right here
 
         print(f"[gen_mem] {fname}: {rows}x{cols} ({fmt}) -> "
               f"{len(values)} words @ 0x{start_addr:X}..0x{addr - 1:X}")
